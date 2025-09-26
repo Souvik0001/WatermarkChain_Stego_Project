@@ -52,6 +52,7 @@ export default function VideoEmbed() {
         file={file}
         accept="video/mp4,video/x-msvideo,video/*"
         disabled={busy}
+        maxSize={200 * 1024 * 1024}
       />
 
       {/* Inputs */}

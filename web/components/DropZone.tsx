@@ -2,25 +2,27 @@
 
 import type React from "react"
 
-import { useCallback, useState } from "react"
+import { useCallback, useState, useMemo } from "react"
 import { motion } from "framer-motion"
 import { UploadCloud, X, FileImage } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { formatFileSize } from "@/lib/format"
 
 interface DropZoneProps {
-  onFileSelect: (file: File) => void
+  onFileSelect: (file: File | null) => void   // allow clearing with null
   accept?: string
-  maxSize?: number
+  maxSize?: number                             // bytes; if omitted, use env default
   disabled?: boolean
   file?: File | null
   className?: string
 }
 
+const ENV_DEFAULT_MB = Number(process.env.NEXT_PUBLIC_MAX_FILE_MB || 10)
+
 export function DropZone({
   onFileSelect,
   accept = "image/*",
-  maxSize = 10 * 1024 * 1024, // 10MB
+  maxSize,                                     // if undefined, we calculate from env
   disabled = false,
   file = null,
   className = "",
@@ -28,19 +30,22 @@ export function DropZone({
   const [isDragOver, setIsDragOver] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Resolve effective max bytes (env default if prop not provided)
+  const effectiveMax = useMemo(() => {
+    const mb = Number.isFinite(maxSize as number)
+      ? Number(maxSize) / (1024 * 1024)
+      : ENV_DEFAULT_MB
+    return Math.max(1, Math.floor(mb)) * 1024 * 1024
+  }, [maxSize])
+
   const validateFile = useCallback(
     (file: File): boolean => {
       setError(null)
 
-      if (file.size > maxSize) {
-        setError(`File size must be less than ${formatFileSize(maxSize)}`)
+      if (file.size > effectiveMax) {
+        setError(`File size must be less than ${formatFileSize(effectiveMax)}`)
         return false
       }
-
-      // if (accept && !file.type.match(accept.replace("*", ".*"))) {
-      //   setError(`File type not supported. Please select ${accept}`)
-      //   return false
-      // }
 
       if (accept) {
         const list = accept.split(",").map(s => s.trim().toLowerCase()).filter(Boolean)
@@ -48,18 +53,14 @@ export function DropZone({
         const name = (file.name || "").toLowerCase()
         const ext = name.split(".").pop()
 
-        // does MIME or extension match any accept item?
         const matchesAccept = list.some(p => {
           if (p.includes("/")) {
-            // MIME pattern (supports wildcards like image/*)
             const rx = new RegExp("^" + p.replace(/\*/g, ".*") + "$")
             return rx.test(mime)
           }
-          // extension item like .png or .jpg
           return p.startsWith(".") && ext ? p.slice(1) === ext : false
         })
 
-        // extra friendly fallbacks for Windows oddities
         const commonFallback =
           mime === "image/jpeg" ||
           mime === "image/jpg" ||
@@ -74,45 +75,35 @@ export function DropZone({
 
       return true
     },
-    [accept, maxSize],
+    [accept, effectiveMax],
   )
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault()
       setIsDragOver(false)
-
       if (disabled) return
 
       const files = Array.from(e.dataTransfer.files)
-      const file = files[0]
-
-      if (file && validateFile(file)) {
-        onFileSelect(file)
-      }
+      const f = files[0]
+      if (f && validateFile(f)) onFileSelect(f)
     },
     [disabled, onFileSelect, validateFile],
   )
 
   const handleFileInput = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0]
-      if (file && validateFile(file)) {
-        onFileSelect(file)
-      }
-      // Reset input
+      const f = e.target.files?.[0]
+      if (f && validateFile(f)) onFileSelect(f)
       e.target.value = ""
     },
     [onFileSelect, validateFile],
   )
 
-  const handleDragOver = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault()
-      if (!disabled) setIsDragOver(true)
-    },
-    [disabled],
-  )
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    if (!disabled) setIsDragOver(true)
+  }, [disabled])
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -121,7 +112,7 @@ export function DropZone({
 
   const clearFile = useCallback(() => {
     setError(null)
-    onFileSelect(null as any) // Clear the file
+    onFileSelect(null) // Clear the file
   }, [onFileSelect])
 
   return (
@@ -132,11 +123,7 @@ export function DropZone({
         onDragLeave={handleDragLeave}
         className={`
           relative border-2 border-dashed rounded-xl p-8 text-center transition-all duration-200
-          ${
-            isDragOver && !disabled
-              ? "border-primary bg-primary/5 glow-primary"
-              : "border-border hover:border-primary/50"
-          }
+          ${isDragOver && !disabled ? "border-primary bg-primary/5 glow-primary" : "border-border hover:border-primary/50"}
           ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}
           ${file ? "glass-strong" : "glass"}
         `}
@@ -189,7 +176,7 @@ export function DropZone({
                 or <span className="text-primary font-medium">click to browse</span>
               </p>
               <p className="text-xs text-muted-foreground mt-2">
-                Max size: {formatFileSize(maxSize)} • {accept}
+                Max size: {formatFileSize(effectiveMax)} • {accept}
               </p>
             </div>
           </div>

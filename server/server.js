@@ -14,9 +14,14 @@ app.use(cors());
 app.use(express.json());
 
 // ---------- config ----------
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({
+  dest: 'uploads/',
+  // Raise server-side upload cap (adjust as needed)
+  limits: { fileSize: 200 * 1024 * 1024 }, // 200 MB
+});
 
-// prefer .env override; otherwise pick a sensible default per OS
+// Prefer .env override; otherwise pick a sensible default per OS
+// On Windows, set PYTHON_BIN="py -3.11" in .env for best results
 const PYTHON_BIN =
   process.env.PYTHON_BIN ||
   (process.platform === 'win32' ? 'python' : 'python3');
@@ -47,7 +52,10 @@ if (RPC_URL && PRIVATE_KEY && CONTRACT_ADDRESS && abi) {
 function runPy(script, args = []) {
   return new Promise((resolve, reject) => {
     const scriptPath = path.join(WATERMARK_DIR, script);
-    const proc = spawn(PYTHON_BIN, [scriptPath, ...args], { shell: false });
+    // NOTE: if PYTHON_BIN contains a space (e.g., "py -3.11"), spawn with { shell:true }
+    const useShell = /\s/.test(PYTHON_BIN);
+    const proc = spawn(PYTHON_BIN, [scriptPath, ...args], { shell: useShell });
+
     let out = '';
     let err = '';
     proc.stdout.on('data', (d) => (out += d.toString()));
@@ -79,23 +87,16 @@ app.post('/api/watermark/image', upload.single('file'), async (req, res) => {
     const outPath = `${req.file.path}_wm.png`;
 
     const args = [
-      '--input',
-      req.file.path,
-      '--output',
-      outPath,
-      '--text',
-      text,
-      '--key',
-      key,
-      '--q',
-      normalizeQ(q),
-      '--min_size',
-      '512', // critical for small uploads
+      '--input', req.file.path,
+      '--output', outPath,
+      '--text', text,
+      '--key', key,
+      '--q', normalizeQ(q),
+      '--min_size', '512', // critical for small uploads
     ];
 
     await runPy('embed_image.py', args);
-    // send file; client will receive a PNG
-    res.sendFile(path.resolve(outPath));
+    res.sendFile(path.resolve(outPath)); // client receives a PNG
   } catch (e) {
     console.error('IMAGE EMBED ERROR:', e.message);
     res.status(500).json({ error: e.message });
@@ -109,12 +110,9 @@ app.post('/api/watermark/image/extract', upload.single('file'), async (req, res)
     if (!req.file) return res.status(400).json({ error: 'file required' });
 
     const args = [
-      '--input',
-      req.file.path,
-      '--key',
-      key,
-      '--q',
-      normalizeQ(q),
+      '--input', req.file.path,
+      '--key', key,
+      '--q', normalizeQ(q),
     ];
 
     const text = await runPy('extract_image.py', args);
@@ -133,16 +131,11 @@ app.post('/api/watermark/video', upload.single('file'), async (req, res) => {
 
     const outPath = `${req.file.path}_wm.mp4`;
     const args = [
-      '--input',
-      req.file.path,
-      '--output',
-      outPath,
-      '--text',
-      text,
-      '--key',
-      key,
-      '--q',
-      normalizeQ(q),
+      '--input', req.file.path,
+      '--output', outPath,
+      '--text', text,
+      '--key', key,
+      '--q', normalizeQ(q),
     ];
     if (every) args.push('--every', String(every));
 
@@ -150,6 +143,28 @@ app.post('/api/watermark/video', upload.single('file'), async (req, res) => {
     res.sendFile(path.resolve(outPath));
   } catch (e) {
     console.error('VIDEO EMBED ERROR:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// VIDEO: extract (sample frames & majority vote)
+app.post('/api/watermark/video/extract', upload.single('file'), async (req, res) => {
+  try {
+    const { key = 'secret', q, every, max_samples } = req.body;
+    if (!req.file) return res.status(400).json({ error: 'file required' });
+
+    const args = [
+      '--input', req.file.path,
+      '--key', key,
+      '--q', normalizeQ(q),
+    ];
+    if (every)       args.push('--every', String(every));
+    if (max_samples) args.push('--max_samples', String(max_samples));
+
+    const text = await runPy('extract_video.py', args);
+    res.json({ text });
+  } catch (e) {
+    console.error('VIDEO EXTRACT ERROR:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
